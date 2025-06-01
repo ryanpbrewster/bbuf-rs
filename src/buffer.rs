@@ -48,7 +48,7 @@ impl Reader {
         Some(Lease {
             reader: self,
             lease: Some(r),
-            view: view,
+            view,
         })
     }
 }

@@ -35,20 +35,25 @@ impl Tracker {
             self.capacity
         };
 
-        let (start, end) = if self.write_offset + sz <= write_cap {
-            (self.write_offset, self.write_offset + sz)
+        let start = if self.write_offset + sz <= write_cap {
+            // Simple case: there's enough space contiguous with our current cursor.
+            self.write_offset
         } else if !already_inverted && sz <= self.read_offset {
-            // Leave a readWatermark so the reader knows where the end of data in the buffer is.
-            // We only set readWatermark when we're flipping from non-inverted -> inverted.
+            // Complex case: we don't have space at our current cursor, but if
+            // we invert then we'll have enough space at the start of the
+            // buffer!
+
+            // Leave an inverted_at marker so the reader knows where the end of
+            // data in the buffer is. We only set inverted_at when we're
+            // flipping from normal -> inverted.
             self.inverted_at = self.write_offset;
-            // We don't have space at the end of the buffer, but we have enough at the start!
-            (0, sz)
+            0
         } else {
             // No space anywhere
             return None;
         };
 
-        return Some(WriteLease::new(start..end));
+        return Some(WriteLease::new(start..start + sz));
     }
 
     pub fn read(&mut self) -> Option<ReadLease> {
@@ -77,7 +82,7 @@ impl Tracker {
         } else if end == self.inverted_at {
             // if the writer has already inverted and there is no more data to read
             // at the end of the buffer, move the reader to the start and clear the
-            // read watermark
+            // inversion marker.
             self.read_offset = 0;
             self.inverted_at = 0;
         } else {
