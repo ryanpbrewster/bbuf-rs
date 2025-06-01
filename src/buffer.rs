@@ -1,29 +1,23 @@
-use std::{cell::UnsafeCell, sync::{Arc, Mutex, Weak}};
+use std::{cell::UnsafeCell, sync::{Arc, Mutex}};
 
-use crate::tracker::{ReadLease, Tracker, WriteLease};
+use crate::tracker::{ReadLease, Tracker};
 
-pub struct Buffer {
+struct Buffer {
     tracker: Mutex<Tracker>,
     data: UnsafeCell<Box<[u8]>>,
 }
-
 pub struct Reader(Arc<Buffer>);
 pub struct Writer(Arc<Buffer>);
-
-impl Buffer {
-    fn new(capacity: usize) -> Self {
-        Self {
-            tracker: Mutex::new(Tracker::new(capacity)),
-            data: UnsafeCell::new(vec![0; capacity].into_boxed_slice()),
-        }
-    }
-    fn split(self) -> (Reader, Writer) {
-        let b = Arc::new(self);
-        (Reader(b.clone()), Writer(b))
-    }
+pub fn create(capacity: usize) -> (Reader, Writer) {
+    let b = Arc::new(Buffer {
+        tracker: Mutex::new(Tracker::new(capacity)),
+        data: UnsafeCell::new(vec![0; capacity].into_boxed_slice()),
+    });
+    (Reader(b.clone()), Writer(b))
 }
+
 impl Writer {
-    fn try_write(&self, p: &[u8]) -> bool {
+    pub fn try_write(&mut self, p: &[u8]) -> bool {
         let mut guard = self.0.tracker.lock().unwrap();
         let Some(w) = guard.write(p.len()) else {
             return false
@@ -37,7 +31,7 @@ impl Writer {
     }
 }
 impl Reader {
-    fn read(&mut self) -> Option<Lease> {
+    pub fn read(&mut self) -> Option<Lease> {
         let r = self.0.tracker.lock().unwrap().read()?;
         let view = unsafe {
             let data = &mut *self.0.data.get();
@@ -61,11 +55,11 @@ impl Drop for Lease<'_> {
 
 #[cfg(test)]
 mod test {
-    use super::Buffer;
+    use super::create;
 
     #[test]
     fn smoke() {
-        let (mut reader, writer) = Buffer::new(10).split();
+        let (mut reader, mut writer) = create(10);
 
         assert!(reader.read().is_none());
 
@@ -78,5 +72,24 @@ mod test {
         }
 
         assert!(reader.read().is_none());
+    }
+
+    #[test]
+    fn write_during_read_lease() {
+        let (mut reader, mut writer) = create(10);
+
+        assert!(writer.try_write(b"asdf"));
+
+        // The reader can see the first write, and is allowed
+        // to hold the lease even while writers continue to append.
+        let l = reader.read().unwrap();
+        assert_eq!(l.view, b"asdf");
+        assert!(writer.try_write(b"pqrs"));
+        assert_eq!(l.view, b"asdf");
+
+        // Subsequent reads are needed to pick up the concurrent writes.
+        drop(l);
+        let l = reader.read().unwrap();
+        assert_eq!(l.view, b"pqrs");
     }
 }
