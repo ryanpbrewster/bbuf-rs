@@ -1,14 +1,16 @@
-use std::{io::{Write}, ptr::write_bytes};
+use std::{io::Write, ptr::write_bytes};
+
+pub mod shared;
 
 struct Buffer {
     // buf is the actual data in the buffer
     buf: Box<[u8]>,
-	// write_offset is where the next write will start
+    // write_offset is where the next write will start
     write_offset: usize,
-	// read_offset is where the next read will start
+    // read_offset is where the next read will start
     read_offset: usize,
-	// read_watermark is 0 if the buffer isn't inverted, and if the buffer is
-	// inverted it indicates where the next read should end.
+    // read_watermark is 0 if the buffer isn't inverted, and if the buffer is
+    // inverted it indicates where the next read should end.
     read_watermark: usize,
 }
 impl Buffer {
@@ -28,13 +30,17 @@ impl Buffer {
         // and we (the writer) are currently working on filling up that free space
         // towards the beginning of the buffer.
         let already_inverted = self.write_offset < self.read_offset;
-    
+
         // we can write either up to the end of the buffer, or in the case of inversion
         // up to the start of the unread data in the buffer.
-        let write_cap = if already_inverted { self.read_offset } else { self.buf.len() };
-    
-        let (start, end) = if self.write_offset+sz < write_cap {
-            (self.write_offset, self.write_offset+sz)
+        let write_cap = if already_inverted {
+            self.read_offset
+        } else {
+            self.buf.len()
+        };
+
+        let (start, end) = if self.write_offset + sz < write_cap {
+            (self.write_offset, self.write_offset + sz)
         } else if !already_inverted && sz < self.read_offset {
             // Leave a readWatermark so the reader knows where the end of data in the buffer is.
             // We only set readWatermark when we're flipping from non-inverted -> inverted.
@@ -43,9 +49,9 @@ impl Buffer {
             (0, sz)
         } else {
             // No space anywhere
-            return false
+            return false;
         };
-    
+
         self.buf[start..end].copy_from_slice(p);
         self.write_offset = end;
         true
@@ -53,13 +59,17 @@ impl Buffer {
 
     fn read<'a>(&'_ self) -> Option<Lease<'a>> {
         let start = self.read_offset;
-        let end = if self.read_watermark > 0 { self.read_watermark } else { self.write_offset };
+        let end = if self.read_watermark > 0 {
+            self.read_watermark
+        } else {
+            self.write_offset
+        };
         if start == end {
             return None;
         }
         let ptr = self.buf.as_ptr();
         let view = unsafe { std::slice::from_raw_parts(ptr.add(start), end - start) };
-        Some(Lease{view, end})
+        Some(Lease { view, end })
     }
 
     fn release(&mut self, l: Lease) {
@@ -76,7 +86,6 @@ impl Buffer {
         } else {
             self.read_offset = l.end;
         }
-    
     }
 }
 struct Lease<'a> {
@@ -85,7 +94,7 @@ struct Lease<'a> {
 }
 
 #[cfg(test)]
-mod test{
+mod test {
     use crate::Buffer;
 
     #[test]
