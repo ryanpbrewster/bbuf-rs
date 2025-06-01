@@ -6,9 +6,10 @@ pub(crate) struct Tracker {
     write_offset: usize,
     // read_offset is where the next read will start
     read_offset: usize,
-    // read_watermark is 0 if the buffer isn't inverted, and if the buffer is
-    // inverted it indicates where the next read should end.
-    read_watermark: usize,
+    // inverted_at is 0 if the buffer isn't inverted, and if the buffer is
+    // inverted it indicates where the last write ended (i.e., where the next
+    // read should end).
+    inverted_at: usize,
 }
 impl Tracker {
     pub fn new(capacity: usize) -> Self {
@@ -16,7 +17,7 @@ impl Tracker {
             capacity,
             write_offset: 0,
             read_offset: 0,
-            read_watermark: 0,
+            inverted_at: 0,
         }
     }
     pub fn write(&mut self, sz: usize) -> Option<WriteLease> {
@@ -24,7 +25,7 @@ impl Tracker {
         // the end of the buffer, but free space towards the beginning of the buffer
         // and we (the writer) are currently working on filling up that free space
         // towards the beginning of the buffer.
-        let already_inverted = self.write_offset < self.read_offset;
+        let already_inverted = self.inverted_at > 0;
 
         // we can write either up to the end of the buffer, or in the case of inversion
         // up to the start of the unread data in the buffer.
@@ -34,12 +35,12 @@ impl Tracker {
             self.capacity
         };
 
-        let (start, end) = if self.write_offset + sz < write_cap {
+        let (start, end) = if self.write_offset + sz <= write_cap {
             (self.write_offset, self.write_offset + sz)
-        } else if !already_inverted && sz < self.read_offset {
+        } else if !already_inverted && sz <= self.read_offset {
             // Leave a readWatermark so the reader knows where the end of data in the buffer is.
             // We only set readWatermark when we're flipping from non-inverted -> inverted.
-            self.read_watermark = self.write_offset;
+            self.inverted_at = self.write_offset;
             // We don't have space at the end of the buffer, but we have enough at the start!
             (0, sz)
         } else {
@@ -47,13 +48,13 @@ impl Tracker {
             return None;
         };
 
-        return Some(WriteLease::new(start..end))
+        return Some(WriteLease::new(start..end));
     }
 
     pub fn read(&mut self) -> Option<ReadLease> {
         let start = self.read_offset;
-        let end = if self.read_watermark > 0 {
-            self.read_watermark
+        let end = if self.inverted_at > 0 {
+            self.inverted_at
         } else {
             self.write_offset
         };
@@ -73,12 +74,12 @@ impl Tracker {
             // Optimization: if we have caught up to the writer, reset everything
             self.read_offset = 0;
             self.write_offset = 0;
-        } else if end == self.read_watermark {
+        } else if end == self.inverted_at {
             // if the writer has already inverted and there is no more data to read
             // at the end of the buffer, move the reader to the start and clear the
             // read watermark
             self.read_offset = 0;
-            self.read_watermark = 0;
+            self.inverted_at = 0;
         } else {
             self.read_offset = end;
         }
@@ -86,7 +87,7 @@ impl Tracker {
 }
 
 #[derive(PartialEq, Eq, Debug)]
-pub struct WriteLease{
+pub struct WriteLease {
     pub start: usize,
     pub len: usize,
 }
@@ -111,7 +112,6 @@ impl ReadLease {
         }
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -192,5 +192,51 @@ mod test {
             t.release(r);
         }
         assert_eq!(t.read(), None);
+    }
+
+    #[test]
+    fn long_write() {
+        let mut t = Tracker::new(10);
+        let w = t.write(10).unwrap();
+        assert_eq!(w, WriteLease::new(0..10));
+        t.commit(w);
+        let r = t.read().unwrap();
+        assert_eq!(r, ReadLease::new(0..10));
+        t.release(r);
+    }
+
+    #[test]
+    fn long_wraparound_write() {
+        let mut t = Tracker::new(10);
+        {
+            let w = t.write(5).unwrap();
+            assert_eq!(w, WriteLease::new(0..5));
+            t.commit(w);
+        }
+        {
+            let r = t.read().unwrap();
+            assert_eq!(r, ReadLease::new(0..5));
+            let w = t.write(5).unwrap();
+            assert_eq!(w, WriteLease::new(5..10));
+            t.commit(w);
+            t.release(r);
+        }
+        {
+            let w = t.write(5).unwrap();
+            assert_eq!(w, WriteLease::new(0..5));
+            t.commit(w);
+        }
+        // Now the buffer is entirely full, with data from 5..10 + 0..5
+        assert_eq!(t.write(1), None);
+        {
+            let r = t.read().unwrap();
+            assert_eq!(r, ReadLease::new(5..10));
+            t.release(r);
+        }
+        {
+            let r = t.read().unwrap();
+            assert_eq!(r, ReadLease::new(0..5));
+            t.release(r);
+        }
     }
 }

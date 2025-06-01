@@ -1,4 +1,7 @@
-use std::{cell::UnsafeCell, sync::{Arc, Mutex}};
+use std::{
+    cell::UnsafeCell,
+    sync::{Arc, Mutex},
+};
 
 use crate::tracker::{ReadLease, Tracker};
 
@@ -25,7 +28,7 @@ impl Writer {
     pub fn try_write(&mut self, p: &[u8]) -> bool {
         let mut guard = self.0.tracker.lock().unwrap();
         let Some(w) = guard.write(p.len()) else {
-            return false
+            return false;
         };
         unsafe {
             let data = &mut *self.0.data.get();
@@ -42,7 +45,11 @@ impl Reader {
             let data = &mut *self.0.data.get();
             &data[r.start..][..r.len]
         };
-        Some(Lease { reader: self, lease: Some(r), view: view })
+        Some(Lease {
+            reader: self,
+            lease: Some(r),
+            view: view,
+        })
     }
 }
 

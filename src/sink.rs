@@ -14,8 +14,14 @@ impl Handle {
         }
     }
 }
-pub fn spawn<'scope, 'env : 'scope, W>(scope: &'scope std::thread::Scope<'scope, 'env>, capacity: usize, mut inner: W) -> Handle 
-    where W : std::io::Write + Send + 'env {
+pub fn spawn<'scope, 'env: 'scope, W>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    capacity: usize,
+    mut inner: W,
+) -> Handle
+where
+    W: std::io::Write + Send + 'env,
+{
     let (mut reader, writer) = crate::buffer::create(capacity);
     let (tx, rx) = crossbeam::channel::bounded(1);
     scope.spawn(move || {
@@ -37,7 +43,7 @@ pub fn spawn<'scope, 'env : 'scope, W>(scope: &'scope std::thread::Scope<'scope,
         let _ = inner.flush();
     });
 
-    Handle { writer, tx, }
+    Handle { writer, tx }
 }
 
 #[cfg(test)]
