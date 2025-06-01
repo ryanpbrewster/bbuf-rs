@@ -1,12 +1,7 @@
-use std::{io::Write, ptr::write_bytes};
+use std::{cell::UnsafeCell, ops::Range};
 
-pub mod tracker;
-
-pub mod buffer;
-
-struct Buffer {
-    // buf is the actual data in the buffer
-    buf: Box<[u8]>,
+pub(crate) struct Tracker {
+    capacity: usize,
     // write_offset is where the next write will start
     write_offset: usize,
     // read_offset is where the next read will start
@@ -15,18 +10,16 @@ struct Buffer {
     // inverted it indicates where the next read should end.
     read_watermark: usize,
 }
-impl Buffer {
-    fn new(cap: usize) -> Self {
+impl Tracker {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            buf: vec![0; cap].into_boxed_slice(),
+            capacity,
             write_offset: 0,
             read_offset: 0,
             read_watermark: 0,
         }
     }
-    fn write(&mut self, p: &[u8]) -> bool {
-        let sz = p.len();
-
+    pub fn write(&mut self, sz: usize) -> Option<WriteLease> {
         // inverted means that there is still data for the reader to read towards
         // the end of the buffer, but free space towards the beginning of the buffer
         // and we (the writer) are currently working on filling up that free space
@@ -38,7 +31,7 @@ impl Buffer {
         let write_cap = if already_inverted {
             self.read_offset
         } else {
-            self.buf.len()
+            self.capacity
         };
 
         let (start, end) = if self.write_offset + sz < write_cap {
@@ -51,15 +44,13 @@ impl Buffer {
             (0, sz)
         } else {
             // No space anywhere
-            return false;
+            return None;
         };
 
-        self.buf[start..end].copy_from_slice(p);
-        self.write_offset = end;
-        true
+        return Some(WriteLease::new(start..end))
     }
 
-    fn read<'a>(&'_ self) -> Option<Lease<'a>> {
+    pub fn read(&mut self) -> Option<ReadLease> {
         let start = self.read_offset;
         let end = if self.read_watermark > 0 {
             self.read_watermark
@@ -69,46 +60,95 @@ impl Buffer {
         if start == end {
             return None;
         }
-        let ptr = self.buf.as_ptr();
-        let view = unsafe { std::slice::from_raw_parts(ptr.add(start), end - start) };
-        Some(Lease { view, end })
+        Some(ReadLease::new(start..end))
     }
 
-    fn release(&mut self, l: Lease) {
-        if l.end == self.write_offset {
+    pub fn commit(&mut self, w: WriteLease) {
+        self.write_offset = w.start + w.len;
+    }
+
+    pub fn release(&mut self, r: ReadLease) {
+        let end = r.start + r.len;
+        if end == self.write_offset {
             // Optimization: if we have caught up to the writer, reset everything
             self.read_offset = 0;
             self.write_offset = 0;
-        } else if l.end == self.read_offset {
+        } else if end == self.read_offset {
             // if the writer has already inverted and there is no more data to read
             // at the end of the buffer, move the reader to the start and clear the
             // read watermark
             self.read_offset = 0;
             self.read_watermark = 0;
         } else {
-            self.read_offset = l.end;
+            self.read_offset = end;
         }
     }
 }
-struct Lease<'a> {
-    view: &'a [u8],
-    end: usize,
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct WriteLease{
+    pub start: usize,
+    pub len: usize,
 }
+impl WriteLease {
+    fn new(range: Range<usize>) -> Self {
+        Self {
+            start: range.start,
+            len: range.end - range.start,
+        }
+    }
+}
+#[derive(PartialEq, Eq, Debug)]
+pub struct ReadLease {
+    pub start: usize,
+    pub len: usize,
+}
+impl ReadLease {
+    fn new(range: Range<usize>) -> Self {
+        Self {
+            start: range.start,
+            len: range.end - range.start,
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod test {
-    use crate::Buffer;
+    use super::*;
 
     #[test]
-    fn ownership_smoke_test() {
-        let mut b = Buffer::new(16);
-        assert!(b.write(b"hello"));
-        let lease = b.read().unwrap();
-        assert_eq!(lease.view, b"hello");
-        assert!(b.write(b"goodbye"));
-        assert_eq!(lease.view, b"hello");
-        b.release(lease);
-        let lease = b.read().unwrap();
-        assert_eq!(lease.view, b"goodbye");
+    fn basic_write_then_read() {
+        let mut t = Tracker::new(10);
+
+        assert_eq!(t.read(), None);
+
+        let w = t.write(4).unwrap();
+        assert_eq!(w, WriteLease::new(0..4));
+        t.commit(w);
+        let r = t.read().unwrap();
+        assert_eq!(r, ReadLease::new(0..4));
+        t.release(r);
+
+        assert_eq!(t.read(), None);
+    }
+
+    #[test]
+    fn out_of_space() {
+        let mut t = Tracker::new(10);
+
+        assert_eq!(t.write(11), None);
+
+        {
+            let w = t.write(4).unwrap();
+            assert_eq!(w, WriteLease::new(0..4));
+            t.commit(w);
+        }
+        {
+            let w = t.write(4).unwrap();
+            assert_eq!(w, WriteLease::new(4..8));
+            t.commit(w);
+        }
+        assert_eq!(t.write(4), None);
     }
 }
