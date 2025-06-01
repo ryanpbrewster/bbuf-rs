@@ -7,7 +7,12 @@ struct Buffer {
     data: UnsafeCell<Box<[u8]>>,
 }
 pub struct Reader(Arc<Buffer>);
+unsafe impl Sync for Reader {}
+unsafe impl Send for Reader {}
+#[derive(Clone)]
 pub struct Writer(Arc<Buffer>);
+unsafe impl Sync for Writer {}
+unsafe impl Send for Writer {}
 pub fn create(capacity: usize) -> (Reader, Writer) {
     let b = Arc::new(Buffer {
         tracker: Mutex::new(Tracker::new(capacity)),
@@ -92,4 +97,5 @@ mod test {
         let l = reader.read().unwrap();
         assert_eq!(l.view, b"pqrs");
     }
+
 }

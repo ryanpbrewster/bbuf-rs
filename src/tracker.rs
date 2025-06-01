@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, ops::Range};
+use std::ops::Range;
 
 pub(crate) struct Tracker {
     capacity: usize,
