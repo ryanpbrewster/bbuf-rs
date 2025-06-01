@@ -54,7 +54,6 @@ mod test {
         std::thread::scope(|scope| {
             let mut h = spawn(scope, 100, &mut buf);
             h.write(b"asdf");
-            std::thread::sleep(Duration::from_millis(1_000));
             h.write(b"pqrs");
         });
         assert_eq!(buf, b"asdfpqrs");
