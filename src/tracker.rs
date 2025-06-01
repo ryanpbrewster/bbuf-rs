@@ -73,7 +73,7 @@ impl Tracker {
             // Optimization: if we have caught up to the writer, reset everything
             self.read_offset = 0;
             self.write_offset = 0;
-        } else if end == self.read_offset {
+        } else if end == self.read_watermark {
             // if the writer has already inverted and there is no more data to read
             // at the end of the buffer, move the reader to the start and clear the
             // read watermark
@@ -150,5 +150,47 @@ mod test {
             t.commit(w);
         }
         assert_eq!(t.write(4), None);
+    }
+
+    #[test]
+    fn wraparound() {
+        // We are trying to set things up so that we have data split
+        // due to a wraparound, specifically data at 5..9 + 0..4
+
+        let mut t = Tracker::new(10);
+        // First, write 0..5
+        {
+            let w = t.write(5).unwrap();
+            assert_eq!(w, WriteLease::new(0..5));
+            t.commit(w);
+        }
+        // This bit requires interleaving reads and writes
+        // in order to ensure that there is room open at the beginning.
+        {
+            let r = t.read().unwrap();
+            assert_eq!(r, ReadLease::new(0..5));
+            let w = t.write(4).unwrap();
+            assert_eq!(w, WriteLease::new(5..9));
+            t.commit(w);
+            t.release(r);
+        }
+        // Now finish writing 0..4
+        {
+            let w = t.write(4).unwrap();
+            assert_eq!(w, WriteLease::new(0..4));
+            t.commit(w);
+        }
+        // Now we should be able to read 5..9, then 0..4
+        {
+            let r = t.read().unwrap();
+            assert_eq!(r, ReadLease::new(5..9));
+            t.release(r);
+        }
+        {
+            let r = t.read().unwrap();
+            assert_eq!(r, ReadLease::new(0..4));
+            t.release(r);
+        }
+        assert_eq!(t.read(), None);
     }
 }

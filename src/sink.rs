@@ -1,5 +1,3 @@
-use std::io;
-
 use crossbeam::channel::Sender;
 
 use crate::buffer;
@@ -44,8 +42,6 @@ pub fn spawn<'scope, 'env : 'scope, W>(scope: &'scope std::thread::Scope<'scope,
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
-
     use super::*;
 
     #[test]

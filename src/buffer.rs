@@ -98,4 +98,26 @@ mod test {
         assert_eq!(l.view, b"pqrs");
     }
 
+    #[test]
+    fn write_wraparound() {
+        let (mut reader, mut writer) = create(10);
+
+        // We're to: write 5, read 5, write 4, write 4.
+        // The last write should wrap around.
+        // We should be able to confirm because `read()` will need to return twice.
+
+        assert!(writer.try_write(b"aaaaa"));
+        let l = reader.read().unwrap();
+        assert_eq!(l.view, b"aaaaa");
+        assert!(writer.try_write(b"bbbb"));
+        drop(l);
+        assert!(writer.try_write(b"cccc"));
+        let l = reader.read().unwrap();
+        assert_eq!(l.view, b"bbbb");
+        drop(l);
+        let l = reader.read().unwrap();
+        assert_eq!(l.view, b"cccc");
+        drop(l);
+        assert!(reader.read().is_none());
+    }
 }
