@@ -9,13 +9,15 @@ struct Buffer {
     tracker: Mutex<Tracker>,
     data: UnsafeCell<Box<[u8]>>,
 }
+
+// We solemnly swear that the users of Buffer will avoid data races on the
+// `data` field by always following access patterns vetted by the `tracker`
+unsafe impl Sync for Buffer {}
+
 pub struct Reader(Arc<Buffer>);
-unsafe impl Sync for Reader {}
-unsafe impl Send for Reader {}
 #[derive(Clone)]
 pub struct Writer(Arc<Buffer>);
-unsafe impl Sync for Writer {}
-unsafe impl Send for Writer {}
+
 pub fn create(capacity: usize) -> (Reader, Writer) {
     let b = Arc::new(Buffer {
         tracker: Mutex::new(Tracker::new(capacity)),
